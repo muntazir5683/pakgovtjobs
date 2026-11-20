@@ -6,8 +6,9 @@ services:
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: .
-    # Chromium is memory-hungry; if crawls get OOM-killed, move to a larger plan.
-    plan: starter
+    # Free plan: the service sleeps after ~15 min idle (so the in-process 6-hourly crawl / 00:05 PKT expiry will
+    # not run reliably) and has only 512 MB RAM (Chromium may get OOM-killed). Upgrade for production use.
+    plan: free
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL          # Render Postgres internal URL, Supabase or Neon (direct / session connection)
