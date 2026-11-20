@@ -1,16 +1,22 @@
 # Render Blueprint for the PakGovJobs backend (Dashboard -> New -> Blueprint -> pick this repo).
-# The frontend is deployed separately on Vercel (see README "Deployment").
+# Uses Render's native Python runtime (no Docker). The frontend is deployed separately on Vercel.
+# (backend/Dockerfile is kept as an alternative if you prefer a container with Chromium system libraries.)
 services:
   - type: web
     name: pakgovjobs-api
-    runtime: docker
-    dockerfilePath: ./backend/Dockerfile
-    dockerContext: .
+    runtime: python
     # Free plan: the service sleeps after ~15 min idle (so the in-process 6-hourly crawl / 00:05 PKT expiry will
     # not run reliably) and has only 512 MB RAM (Chromium may get OOM-killed). Upgrade for production use.
     plan: free
+    # No rootDir on purpose: the app reads db/schema.sql from the repo root.
+    buildCommand: pip install -r backend/requirements.txt && playwright install chromium
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: PLAYWRIGHT_BROWSERS_PATH   # 0 = keep Chromium inside the installed package so it survives into runtime
+        value: "0"
       - key: DATABASE_URL          # Render Postgres internal URL, Supabase or Neon (direct / session connection)
         sync: false
       - key: GEMINI_API_KEY        # https://aistudio.google.com/apikey

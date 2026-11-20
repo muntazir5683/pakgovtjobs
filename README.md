@@ -73,7 +73,11 @@ npm run dev                    # http://localhost:3000   (admin: /admin)
 
 ## Deployment
 
-**Backend -> Render** (`render.yaml` + `backend/Dockerfile`; the image includes Chromium for Playwright)
+**Backend -> Render** (`render.yaml`, native Python runtime, no Docker; `backend/Dockerfile` is an optional alternative)
+* Build: `pip install -r backend/requirements.txt && playwright install chromium`. Start:
+  `cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT`. Python is pinned to 3.12 via `PYTHON_VERSION`.
+* Render's native runtime may lack Chromium's system libraries. If Playwright cannot launch, the crawler logs it
+  and falls back to plain HTTP for each page (JS-only portals then yield less). Use the Dockerfile for full rendering.
 1. Create a PostgreSQL database (Render Postgres, Supabase or Neon) and note its connection string.
 2. Render dashboard -> New -> Blueprint -> select this repo. Fill in the prompted variables:
    `DATABASE_URL`, `GEMINI_API_KEY`, `ADMIN_PASSWORD`, `CORS_ORIGINS` (your Vercel URL).
