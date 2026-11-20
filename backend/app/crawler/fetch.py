@@ -229,7 +229,11 @@ def render_html(url: str, paginate: bool = False) -> str:
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
-                headless=True, args=["--disable-blink-features=AutomationControlled", "--ignore-certificate-errors"]
+                headless=True, args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--ignore-certificate-errors",
+                    "--disable-dev-shm-usage",  # containers have a tiny /dev/shm
+                ],
             )
             try:
                 ctx = browser.new_context(

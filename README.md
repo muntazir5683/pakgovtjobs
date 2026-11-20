@@ -66,10 +66,29 @@ npm run dev                    # http://localhost:3000   (admin: /admin)
   check too, so there is no 00:00–00:05 gap. Expired rows are never deleted.
 * **Ads with no stated deadline** — `last_date` stays `NULL` and the card says "Deadline not stated".
   They count as closed `NO_DEADLINE_EXPIRE_DAYS` (default 45) after `publish_date`.
-* **Cost control** — at most `MAX_NEW_PER_SOURCE` (15) new candidates per source per run go to Gemini, so a
-  first run over a backlog spreads across several 6-hourly runs instead of one huge bill.
+* **Cost control** — unlimited by default (only links/pages not seen before reach Gemini). Set
+  `MAX_NEW_PER_SOURCE` (e.g. 15) to cap Gemini calls per source per run; the rest is deferred to the next run.
 * **Admin** — `/admin` logs in against `ADMIN_PASSWORD`; the backend issues a signed 12 h token stored in an
   httpOnly cookie. Set strong values for `ADMIN_PASSWORD` / `ADMIN_TOKEN_SECRET` before deploying.
+
+## Deployment
+
+**Backend -> Render** (`render.yaml` + `backend/Dockerfile`; the image includes Chromium for Playwright)
+1. Create a PostgreSQL database (Render Postgres, Supabase or Neon) and note its connection string.
+2. Render dashboard -> New -> Blueprint -> select this repo. Fill in the prompted variables:
+   `DATABASE_URL`, `GEMINI_API_KEY`, `ADMIN_PASSWORD`, `CORS_ORIGINS` (your Vercel URL).
+   `ADMIN_TOKEN_SECRET` is generated for you.
+3. The schema is created automatically on first start. Check `https://<service>.onrender.com/api/health`.
+4. Keep exactly **one** instance/worker (the scheduler and crawl lock are in-process) on an always-on plan,
+   otherwise the 6-hourly crawl and the 00:05 PKT expiry will not run while the service sleeps.
+
+**Frontend -> Vercel**
+1. New Project -> import the repo -> set **Root Directory** to `frontend` (framework: Next.js).
+2. Settings -> Environment Variables: `API_URL` = your Render URL (e.g. `https://pakgovjobs-api.onrender.com`,
+   no trailing slash). It is read on the server only. (`NEXT_PUBLIC_API_URL` is accepted as an alias.)
+3. Deploy. After the first deploy, put the Vercel URL into the backend's `CORS_ORIGINS`.
+
+Never commit `backend/.env`; secrets live only in the Render / Vercel dashboards.
 
 ## Tests
 ```powershell

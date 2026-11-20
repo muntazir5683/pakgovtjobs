@@ -1,4 +1,10 @@
-export const API_URL = process.env.API_URL ?? "http://localhost:8000";
+// Backend base URL. Set API_URL in Vercel (Project -> Settings -> Environment Variables). It is only ever read
+// on the server (server components / server actions), so it stays private; NEXT_PUBLIC_API_URL is accepted too.
+export const API_URL = (
+  process.env.API_URL ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  "http://localhost:8000"
+).replace(/\/+$/, "");
 
 export type Job = {
   id: number;

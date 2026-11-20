@@ -1,0 +1,28 @@
+# Render Blueprint for the PakGovJobs backend (Dashboard -> New -> Blueprint -> pick this repo).
+# The frontend is deployed separately on Vercel (see README "Deployment").
+services:
+  - type: web
+    name: pakgovjobs-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    # Chromium is memory-hungry; if crawls get OOM-killed, move to a larger plan.
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL          # Render Postgres internal URL, Supabase or Neon (direct / session connection)
+        sync: false
+      - key: GEMINI_API_KEY        # https://aistudio.google.com/apikey
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_TOKEN_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS          # your Vercel URL, e.g. https://pakgovjobs.vercel.app
+        sync: false
+      - key: RUN_SCHEDULER         # crawl every 6h + 00:05 PKT expiry (needs an always-on instance, not a sleeping free one)
+        value: "true"
+      - key: MAX_CONCURRENT_SOURCES
+        value: "2"
