@@ -1,0 +1,32 @@
+# Python
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node / Next.js
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+next-env.d.ts
+*.tsbuildinfo
+
+# Local databases
+*.db
+*.sqlite3
+
+# Secrets (never commit API keys / DB credentials). The *.example templates stay tracked.
+backend/.env
+.env
+.env.local
+frontend/.env.local
+**/.env.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
