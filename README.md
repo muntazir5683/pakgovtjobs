@@ -1,3 +1,9 @@
+---
+title: PakGovJobs API
+sdk: docker
+app_port: 7860
+---
+
 # PakGovJobs
 
 Automated Pakistani government job aggregator (see the SRDS). Crawls official sources every 6 hours,
@@ -73,29 +79,27 @@ npm run dev                    # http://localhost:3000   (admin: /admin)
 
 ## Deployment
 
-**Backend -> Render** (`render.yaml`, native Python runtime, no Docker; `backend/Dockerfile` is an optional alternative)
-* Build: `pip install -r backend/requirements.txt && playwright install chromium`. Start:
-  `cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT`. Python is pinned to 3.12 via `PYTHON_VERSION`.
-* Creating the service by hand instead of via the Blueprint? Leave Root Directory empty (a root-level
-  `requirements.txt` pulls in `backend/requirements.txt`), use the build/start commands above, and add the
-  environment variables listed in `render.yaml`.
-* Render's native runtime may lack Chromium's system libraries. If Playwright cannot launch, the crawler logs it
-  and falls back to plain HTTP for each page (JS-only portals then yield less). Use the Dockerfile for full rendering.
-1. Create a PostgreSQL database (Render Postgres, Supabase or Neon) and note its connection string.
-2. Render dashboard -> New -> Blueprint -> select this repo. Fill in the prompted variables:
-   `DATABASE_URL`, `GEMINI_API_KEY`, `ADMIN_PASSWORD`, `CORS_ORIGINS` (your Vercel URL).
-   `ADMIN_TOKEN_SECRET` is generated for you.
-3. The schema is created automatically on first start. Check `https://<service>.onrender.com/api/health`.
-4. Keep exactly **one** instance/worker (the scheduler and crawl lock are in-process) on an always-on plan,
-   otherwise the 6-hourly crawl and the 00:05 PKT expiry will not run while the service sleeps.
+**Backend -> Hugging Face Spaces (Docker)** — the root `Dockerfile` builds the API plus Chromium for Playwright
+and listens on port **7860** (override with `PORT`).
+1. Create a PostgreSQL database that outlives the container (Supabase or Neon, direct / session connection).
+2. Create a new Space on https://huggingface.co/new-space with SDK **Docker** and push this repo to it
+   (the `sdk: docker` / `app_port: 7860` front matter at the top of this README configures the Space).
+3. Space -> Settings -> Variables and secrets: `DATABASE_URL`, `GEMINI_API_KEY`, `ADMIN_PASSWORD`,
+   `ADMIN_TOKEN_SECRET`, `CORS_ORIGINS` (your Vercel URL). Optional: `GEMINI_MODEL`, `MAX_CONCURRENT_SOURCES`.
+4. The schema is created on first start. Check `https://<user>-<space>.hf.space/api/health`.
+5. Keep exactly **one** instance (the scheduler and crawl lock are in-process). Free Spaces can go to sleep when
+   idle, which pauses the 6-hourly crawl and the 00:05 PKT expiry until the Space wakes up.
+
+Build / run locally: `docker build -t pakgovjobs-api .` then
+`docker run -p 7860:7860 --env-file backend/.env pakgovjobs-api`.
 
 **Frontend -> Vercel**
 1. New Project -> import the repo -> set **Root Directory** to `frontend` (framework: Next.js).
-2. Settings -> Environment Variables: `API_URL` = your Render URL (e.g. `https://pakgovjobs-api.onrender.com`,
+2. Settings -> Environment Variables: `API_URL` = the Space URL (e.g. `https://<user>-<space>.hf.space`,
    no trailing slash). It is read on the server only. (`NEXT_PUBLIC_API_URL` is accepted as an alias.)
 3. Deploy. After the first deploy, put the Vercel URL into the backend's `CORS_ORIGINS`.
 
-Never commit `backend/.env`; secrets live only in the Render / Vercel dashboards.
+Never commit `backend/.env`; secrets live only in the Space / Vercel dashboards.
 
 ## Tests
 ```powershell
