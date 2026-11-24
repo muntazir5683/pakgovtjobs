@@ -354,14 +354,13 @@ def run_crawl(trigger: str = "scheduler", source_filter: str | None = None) -> d
         return None
     try:
         with db.connection() as lock_conn:
-            ok = lock_conn.execute("SELECT pg_try_advisory_lock(%s) AS ok", (ADVISORY_LOCK_KEY,)).fetchone()["ok"]
-            if not ok:
+            if not db.try_advisory_lock(lock_conn, ADVISORY_LOCK_KEY):
                 log.info("Another instance holds the crawl lock; skipping (%s)", trigger)
                 return None
             try:
                 return _run_locked(trigger, source_filter)
             finally:
-                lock_conn.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_KEY,))
+                db.advisory_unlock(lock_conn, ADVISORY_LOCK_KEY)
     finally:
         _run_lock.release()
 

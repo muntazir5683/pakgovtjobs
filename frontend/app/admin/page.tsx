@@ -66,7 +66,7 @@ async function AdminContent() {
         </div>
       </div>
 
-      {!o.gemini_configured && (
+      {o.gemini_configured === false && (
         <p role="alert" className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-900">
           GEMINI_API_KEY is not set on the backend — crawls can discover links but cannot extract jobs.
         </p>
@@ -86,8 +86,14 @@ async function AdminContent() {
             Status:{" "}
             <b>{running ? `running (${o.crawler.trigger}, since ${pkt(o.crawler.started_at)})` : "idle"}</b>
           </li>
-          <li>Next crawl: {pkt(o.schedule.crawl_sources)}</li>
-          <li>Next expiry (00:05 PKT): {pkt(o.schedule.expire_jobs)}</li>
+          {o.schedule.github_actions_crawl ? (
+            <li>Crawls run from GitHub Actions: {o.schedule.github_actions_crawl}</li>
+          ) : (
+            <>
+              <li>Next crawl: {pkt(o.schedule.crawl_sources)}</li>
+              <li>Next expiry (00:05 PKT): {pkt(o.schedule.expire_jobs)}</li>
+            </>
+          )}
           {o.crawler.summary && (
             <li>
               Last run ({pkt(o.crawler.finished_at)}):{" "}

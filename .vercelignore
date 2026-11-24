@@ -1,0 +1,15 @@
+backend/.venv
+backend/tests
+backend/**/__pycache__
+frontend/node_modules
+frontend/.next
+**/.git
+**/__pycache__
+**/.pytest_cache
+Dockerfile
+.dockerignore
+*.db
+*.sqlite3
+backend/.env
+frontend/.env.local
+README.md

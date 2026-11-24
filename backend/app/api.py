@@ -9,28 +9,27 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
-from . import db, scheduler
+from . import db
 from .config import settings
-from .crawler import runner
 from .taxonomy import EDUCATION_LEVELS, PROVINCES, SECTORS
 from .timeutil import now_pkt, today_pkt
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", dependencies=[Depends(db.ensure_ready)])
 
 CLOSING_SOON_DAYS = 3
 
 JOB_COLUMNS = """
     id, slug, title, department, sector, province, education, education_level, total_posts,
     publish_date, last_date, status, official_apply_url, ad_media_url, created_at,
-    COALESCE(last_date, publish_date + %(grace)s::int) AS closes_on
-"""
-CLOSES_ON = "COALESCE(last_date, publish_date + %(grace)s::int)"
+    {closes_on} AS closes_on
+""".replace("{closes_on}", "COALESCE(last_date, " + db.add_days("publish_date", "%(grace)s") + ")")
+CLOSES_ON = "COALESCE(last_date, " + db.add_days("publish_date", "%(grace)s") + ")"
 
 
 # ------------------------------------------------------------------ serialization
 
 def _serialize(row: dict, today: date) -> dict:
-    closes_on: date = row.pop("closes_on")
+    closes_on: date = db.as_date(row.pop("closes_on"))
     expired = row["status"] == "expired" or closes_on < today
     days_left = None if expired or row["last_date"] is None else (row["last_date"] - today).days
     row.update(
@@ -97,7 +96,8 @@ def list_jobs(
         for i, term in enumerate(q.split()[:6]):
             params[f"q{i}"] = _like(term)
             where.append(
-                f"(title ILIKE %(q{i})s OR department ILIKE %(q{i})s OR education ILIKE %(q{i})s)"
+                f"(title ILIKE %(q{i})s ESCAPE '\\' OR department ILIKE %(q{i})s ESCAPE '\\' "
+                f"OR education ILIKE %(q{i})s ESCAPE '\\')"
             )
 
     where_sql = " AND ".join(where)
@@ -193,19 +193,66 @@ def admin_overview() -> dict:
             """,
             {"today": today, "grace": settings.no_deadline_expire_days},
         ).fetchone()
+    if settings.is_serverless:
+        # Vercel only serves the API; the crawler runs in GitHub Actions (see .github/workflows/crawl.yml).
+        crawler = {"running": False, "trigger": "github-actions", "started_at": None, "finished_at": None, "summary": None}
+        schedule = {"github_actions_crawl": "every 6 hours (UTC cron 0 */6 * * *)"}
+        gemini = None
+    else:
+        from . import scheduler
+        from .crawler import runner
+
+        crawler, schedule = runner.state, scheduler.next_runs()
+        gemini = bool(settings.gemini_api_key.strip()) and not settings.gemini_api_key.strip().upper().startswith("PASTE_")
     return {
         "now_pkt": now_pkt().isoformat(),
-        "crawler": runner.state,
-        "schedule": scheduler.next_runs(),
-        "gemini_configured": bool(settings.gemini_api_key.strip())
-        and not settings.gemini_api_key.strip().upper().startswith("PASTE_"),
+        "crawler": crawler,
+        "schedule": schedule,
+        "gemini_configured": gemini,
         "counts": counts,
         "sources": sources,
     }
 
 
+def _dispatch_github_workflow(source: str | None) -> None:
+    """Start the GitHub Actions crawl (used on Vercel, where no crawler can run in-process)."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    if not (settings.github_token and settings.github_repo):
+        raise HTTPException(
+            501,
+            "Crawling does not run on Vercel. It runs from GitHub Actions every 6 hours; start it manually from the "
+            "repo's Actions tab, or set GITHUB_TOKEN and GITHUB_REPO to enable this button.",
+        )
+    payload = {"ref": settings.github_ref, "inputs": {"source": source or ""}}
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{settings.github_repo}/actions/workflows/{settings.github_workflow}/dispatches",
+        data=json.dumps(payload).encode(),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {settings.github_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "pakgovjobs",
+        },
+    )
+    try:
+        urllib.request.urlopen(req, timeout=15).close()
+    except urllib.error.HTTPError as e:
+        raise HTTPException(502, f"GitHub refused the workflow dispatch ({e.code})") from e
+    except urllib.error.URLError as e:
+        raise HTTPException(502, f"Could not reach GitHub: {e.reason}") from e
+
+
 @router.post("/admin/crawl", status_code=202, dependencies=[Depends(require_admin)])
 def admin_crawl(source: str | None = Query(None, description="Only crawl sources whose name contains this")) -> dict:
+    if settings.is_serverless:
+        _dispatch_github_workflow(source)
+        return {"started": True, "via": "github-actions"}
+    from .crawler import runner
+
     if runner.state["running"]:
         raise HTTPException(409, "A crawl is already running")
     threading.Thread(
@@ -229,4 +276,4 @@ def admin_toggle_source(source_id: int) -> dict:
         ).fetchone()
     if row is None:
         raise HTTPException(404, "Source not found")
-    return row
+    return {"id": row["id"], "is_active": bool(row["is_active"])}

@@ -51,9 +51,10 @@ def sync_sources() -> int:
         if entries:
             # sources.json is the source of truth: drop rows for URLs that were removed/replaced.
             # Their jobs are kept (jobs.source_id is set to NULL). Demo seed data is left alone.
+            urls = [e["url"] for e in entries]
             conn.execute(
-                "DELETE FROM sources WHERE NOT (url = ANY(%s)) AND url NOT LIKE 'demo://%%'",
-                ([e["url"] for e in entries],),
+                f"DELETE FROM sources WHERE url NOT IN ({db.in_placeholders(len(urls))}) AND url NOT LIKE 'demo://%%'",
+                urls,
             )
     return len(entries)
 

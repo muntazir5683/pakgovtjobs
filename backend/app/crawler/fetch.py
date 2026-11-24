@@ -217,14 +217,29 @@ def _collect_all_pages(page) -> str:
     return "<html><body>" + "\n".join(chunks) + "</body></html>"
 
 
+# Playwright/Chromium is optional (e.g. absent from the lightweight Vercel runtime): once we know it is
+# missing, every later render attempt fails fast and the crawler uses plain HTTP fetching only.
+_render_unavailable: str | None = None
+
+
+def _disable_rendering(reason: str) -> None:
+    global _render_unavailable
+    if _render_unavailable is None:
+        _render_unavailable = reason
+        log.warning("Page rendering disabled (%s); falling back to plain HTTP for all sources", reason)
+
+
 def render_html(url: str, paginate: bool = False) -> str:
     """Render a JS-heavy page with Playwright (sync API; runs fine inside a worker thread).
     With paginate=True it also walks 'active jobs' tabs and all pagination pages."""
+    if _render_unavailable:  # already known to be missing: skip quietly, plain HTTP is used instead
+        raise FetchError(_render_unavailable)
     try:
         from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
-    except ImportError as e:  # pragma: no cover
-        raise FetchError("playwright is not installed") from e
+    except ImportError as e:
+        _disable_rendering("playwright is not installed")
+        raise FetchError(_render_unavailable) from e
 
     try:
         with sync_playwright() as pw:
@@ -266,7 +281,10 @@ def render_html(url: str, paginate: bool = False) -> str:
             finally:
                 browser.close()
     except PlaywrightError as e:
-        raise FetchError(f"Playwright: {str(e).splitlines()[0]}") from e
+        first = str(e).splitlines()[0] if str(e) else "error"
+        if "Executable doesn't exist" in str(e) or "playwright install" in str(e):
+            _disable_rendering("Chromium is not installed for Playwright")
+        raise FetchError(f"Playwright: {first}") from e
 
 
 _BLOCK_RE = re.compile(

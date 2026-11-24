@@ -1,10 +1,20 @@
-// Backend base URL. Set API_URL in Vercel (Project -> Settings -> Environment Variables). It is only ever read
-// on the server (server components / server actions), so it stays private; NEXT_PUBLIC_API_URL is accepted too.
-export const API_URL = (
-  process.env.API_URL ??
-  process.env.NEXT_PUBLIC_API_URL ??
-  "http://localhost:8000"
-).replace(/\/+$/, "");
+// Backend base URL (only ever read on the server, so it stays private).
+//  1. API_URL (or NEXT_PUBLIC_API_URL) when set - e.g. http://127.0.0.1:8010 locally, or an external backend.
+//  2. On Vercel the FastAPI backend is deployed in the same project under /api, so default to this deployment's
+//     own origin (the production domain on production, the deployment URL on previews).
+//  3. Otherwise the local dev backend.
+function resolveApiUrl(): string {
+  const explicit = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL;
+  if (explicit) return explicit;
+  const host =
+    process.env.VERCEL_ENV === "production"
+      ? (process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL)
+      : process.env.VERCEL_URL;
+  if (host) return `https://${host}`;
+  return "http://localhost:8000";
+}
+
+export const API_URL = resolveApiUrl().replace(/\/+$/, "");
 
 export type Job = {
   id: number;

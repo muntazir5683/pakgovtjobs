@@ -1,4 +1,5 @@
-"""End-to-end tests against a real PostgreSQL (set TEST_DATABASE_URL; the DB is TRUNCATEd!).
+"""End-to-end tests against a real database: a throwaway SQLite file by default, or PostgreSQL when
+TEST_DATABASE_URL is set (that database is wiped!).
 
 The Gemini call and the government websites are replaced by a local HTTP server and a canned
 extractor response, so the whole pipeline (discover -> fetch -> extract -> dedup -> insert ->
@@ -11,8 +12,6 @@ from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-
-pytestmark = pytest.mark.skipif(not os.environ.get("TEST_DATABASE_URL"), reason="TEST_DATABASE_URL not set")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -30,11 +29,20 @@ def _close_pool_at_end():
     db.close_pool()
 
 
+def _wipe() -> None:
+    with db.connection() as conn:
+        if db.IS_SQLITE:
+            for t in ("jobs", "seen_links", "sources"):
+                conn.execute(f"DELETE FROM {t}")
+            conn.execute("DELETE FROM sqlite_sequence")
+        else:
+            conn.execute("TRUNCATE jobs, seen_links, sources RESTART IDENTITY CASCADE")
+
+
 @pytest.fixture(autouse=True)
 def clean_db():
     db.init_schema()
-    with db.connection() as conn:
-        conn.execute("TRUNCATE jobs, seen_links, sources RESTART IDENTITY CASCADE")
+    _wipe()
     yield
 
 
@@ -42,8 +50,7 @@ def clean_db():
 def client():
     with TestClient(app) as c:
         # app startup synced the real sources.json; tests want a blank slate
-        with db.connection() as conn:
-            conn.execute("TRUNCATE jobs, seen_links, sources RESTART IDENTITY CASCADE")
+        _wipe()
         yield c
 
 

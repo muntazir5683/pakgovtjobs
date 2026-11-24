@@ -14,9 +14,10 @@ node_modules/
 next-env.d.ts
 *.tsbuildinfo
 
-# Local databases
+# Local databases (SQLite fallback when DATABASE_URL is unset)
 *.db
 *.sqlite3
+backend/pakgovjobs.db
 
 # Secrets (never commit API keys / DB credentials). The *.example templates stay tracked.
 backend/.env

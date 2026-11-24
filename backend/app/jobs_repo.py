@@ -32,13 +32,17 @@ def unseen_hashes(hashes: list[str]) -> set[str]:
     """Return the subset of `hashes` that is in neither seen_links nor jobs."""
     if not hashes:
         return set()
+    known: set[str] = set()
     with db.connection() as conn:
-        rows = conn.execute(
-            "SELECT link_hash AS h FROM seen_links WHERE link_hash = ANY(%s) "
-            "UNION SELECT source_hash FROM jobs WHERE source_hash = ANY(%s)",
-            (hashes, hashes),
-        ).fetchall()
-    known = {r["h"] for r in rows}
+        for i in range(0, len(hashes), 400):  # stay far below SQLite's bound-parameter limit
+            chunk = hashes[i:i + 400]
+            ph = db.in_placeholders(len(chunk))
+            rows = conn.execute(
+                f"SELECT link_hash AS h FROM seen_links WHERE link_hash IN ({ph}) "
+                f"UNION SELECT source_hash FROM jobs WHERE source_hash IN ({ph})",
+                (*chunk, *chunk),
+            ).fetchall()
+            known.update(r["h"] for r in rows)
     return set(hashes) - known
 
 
@@ -112,13 +116,19 @@ def insert_job(
 
 def drop_fallback_jobs(source_id: int, urls: list[str]) -> int:
     """The AI has now extracted these ads properly: remove the rough non-AI rows for the same URLs."""
+    urls = list(dict.fromkeys(urls))
+    removed = 0
     with db.connection() as conn:
-        cur = conn.execute(
-            "DELETE FROM jobs WHERE parse_method = 'fallback' AND source_id = %s "
-            "AND (official_apply_url = ANY(%s) OR ad_media_url = ANY(%s))",
-            (source_id, urls, urls),
-        )
-        return cur.rowcount
+        for i in range(0, len(urls), 400):
+            chunk = urls[i:i + 400]
+            ph = db.in_placeholders(len(chunk))
+            cur = conn.execute(
+                "DELETE FROM jobs WHERE parse_method = 'fallback' AND source_id = %s "
+                f"AND (official_apply_url IN ({ph}) OR ad_media_url IN ({ph}))",
+                (source_id, *chunk, *chunk),
+            )
+            removed += cur.rowcount
+    return removed
 
 
 def job_exists_for_url(source_id: int, url: str) -> bool:

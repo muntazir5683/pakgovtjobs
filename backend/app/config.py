@@ -1,6 +1,9 @@
+import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -9,8 +12,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=BASE_DIR / ".env", extra="ignore")
 
-    # Database (Supabase / Neon / local Postgres connection string)
-    database_url: str = "postgresql://postgres:postgres@localhost:5432/pakgovjobs"
+    # Database. Neon / Supabase / any PostgreSQL URL ("postgres://" and "postgresql+driver://" are normalized to
+    # "postgresql://"). Leave it unset to fall back to a local SQLite file (backend/pakgovjobs.db) - handy for
+    # development; a "sqlite:///path/to.db" URL also works.
+    database_url: str = ""
+    db_pool_max: int = 12  # PostgreSQL pool size (use 1-3 on serverless)
 
     # Gemini
     gemini_api_key: str = ""
@@ -25,7 +31,7 @@ class Settings(BaseSettings):
     # API
     cors_origins: str = "http://localhost:3000"
 
-    # Scheduler
+    # Scheduler (ignored on Vercel: crawling runs from GitHub Actions there)
     run_scheduler: bool = True
     crawl_interval_hours: int = 6
     crawl_on_startup: bool = False
@@ -55,6 +61,31 @@ class Settings(BaseSettings):
     # Lifecycle
     # Ads that never state a deadline are treated as closed this many days after publish_date.
     no_deadline_expire_days: int = 45
+
+    # Admin "Run crawler now" on Vercel: dispatch the GitHub Actions workflow instead (needs a token with
+    # "actions: write" on the repo, e.g. a fine-grained PAT). Leave empty to disable.
+    github_token: str = ""
+    github_repo: str = ""  # "owner/name"
+    github_workflow: str = "crawl.yml"
+    github_ref: str = "main"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _normalize_database_url(cls, v: object) -> str:
+        url = str(v or "").strip().strip("\"'")
+        if not url:
+            return "sqlite:///" + (BASE_DIR / "pakgovjobs.db").as_posix()
+        # Neon / Heroku style "postgres://" and SQLAlchemy style "postgresql+psycopg2://" -> "postgresql://".
+        return re.sub(r"^postgres(?:ql)?(?:\+\w+)?://", "postgresql://", url)
+
+    @property
+    def is_sqlite(self) -> bool:
+        return self.database_url.startswith("sqlite")
+
+    @property
+    def is_serverless(self) -> bool:
+        """True on Vercel: no background scheduler / in-process crawling inside the API function."""
+        return bool(os.environ.get("VERCEL"))
 
     @property
     def cors_origin_list(self) -> list[str]:

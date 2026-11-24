@@ -1,27 +1,27 @@
----
-title: PakGovJobs API
-sdk: docker
-app_port: 7860
----
-
 # PakGovJobs
 
-Automated Pakistani government job aggregator (see the SRDS). Crawls official sources every 6 hours,
+Automated Pakistani government job aggregator. Crawls official sources every 6 hours,
 extracts structured job data with Gemini Flash, publishes it, and moves jobs to **Expired** after the
 deadline (Asia/Karachi time).
 
 ```
-db/schema.sql          PostgreSQL schema (sources, jobs, seen_links)
-backend/               FastAPI + crawler + Gemini extractor + APScheduler
-  sources.json         registry of official recruitment URLs
-frontend/              Next.js (App Router, TypeScript, Tailwind) — /, /expired-jobs, /job/[slug], /admin
+db/schema.sql            PostgreSQL schema (sources, jobs, seen_links)
+db/schema_sqlite.sql     SQLite schema (local fallback when DATABASE_URL is unset)
+backend/                 FastAPI + crawler + Gemini extractor + APScheduler
+  sources.json           registry of official recruitment URLs
+frontend/                Next.js (App Router, TypeScript, Tailwind) — /, /expired-jobs, /job/[slug], /admin
+api/index.py             Vercel Python entrypoint (same FastAPI app under /api/*)
+.github/workflows/       scheduled crawler (Playwright + Neon)
 ```
 
-## Run it
+## Run it locally
 
 ### 1. Database
-Create a Supabase/Neon project (or local Postgres) and copy its connection string. The schema is
-applied automatically on backend start (`db/schema.sql` is idempotent).
+- **Easiest:** leave `DATABASE_URL` unset — the backend creates `backend/pakgovjobs.db` (SQLite).
+- **Or** create a Neon/Supabase Postgres database and paste its connection string
+  (`postgres://` and `postgresql://` both work; `postgres://` is normalized).
+
+The schema is applied automatically on backend start (`db/schema.sql` / `schema_sqlite.sql` are idempotent).
 
 ### 2. Backend
 ```powershell
@@ -29,81 +29,91 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
 .\.venv\Scripts\python -m playwright install chromium
-copy .env.example .env        # set DATABASE_URL, GEMINI_API_KEY, ADMIN_PASSWORD, ADMIN_TOKEN_SECRET
-.\.venv\Scripts\python -m app.cli check-sources    # which source URLs are reachable (no DB/AI needed)
-.\.venv\Scripts\python -m uvicorn app.main:app --port 8000   # run ONE worker: it hosts the scheduler
+copy .env.example .env        # set GEMINI_API_KEY, ADMIN_PASSWORD, ADMIN_TOKEN_SECRET (+ DATABASE_URL if not using SQLite)
+.\.venv\Scripts\python -m app.cli check-sources
+.\.venv\Scripts\python -m uvicorn app.main:app --port 8000   # ONE worker hosts the local scheduler
 ```
-Useful commands:
 
 | Command | What it does |
 | :-- | :-- |
 | `python -m app.cli check-sources` | HTTP-checks every URL in `sources.json` (no DB / AI needed) |
-| `python -m app.cli discover ppsc` | dry run: shows the candidate links found on matching sources (no DB / AI) |
+| `python -m app.cli discover ppsc` | dry run: candidate links on matching sources |
 | `python -m app.cli crawl --source ppsc` | one real crawl of matching sources |
-| `python -m app.cli expire` | run the active → expired transition now |
-| `python -m app.cli seed-demo` | insert 8 fake jobs so you can see the UI without a Gemini key |
+| `python -m app.cli expire` | active → expired transition now |
+| `python -m app.cli seed-demo` | 8 fake jobs for UI work without a Gemini key |
 
-If port 8000 is taken on your machine, run uvicorn on another port and set `API_URL` in `frontend/.env.local`.
+If port 8000 is taken, run uvicorn on another port and set `API_URL` in `frontend/.env.local`.
 
-Schedule (PKT, in-process via APScheduler): crawl at 00:15 / 06:15 / 12:15 / 18:15, expiry nightly at
-00:05. On startup the backend also runs the expiry once, so a restart after midnight self-heals.
+Local schedule (PKT, in-process via APScheduler): crawl at :15 every 6h, expiry nightly at 00:05.
 
 ### 3. Frontend
 ```powershell
 cd frontend
-copy .env.example .env.local   # API_URL=http://localhost:8000
 npm install
-npm run dev                    # http://localhost:3000   (admin: /admin)
+copy .env.example .env.local      # API_URL=http://localhost:8000
+npm run dev                       # http://localhost:3000
 ```
 
-## Behaviour worth knowing
+## Design notes
 
-* **Dedup** — `source_hash = sha256(url + normalized title)`, `UNIQUE`. Every evaluated link is also
-  stored in `seen_links`: PDFs/images are never re-downloaded or re-sent to Gemini; HTML pages are
-  re-fetched each run but only re-sent when their text changed (digits ignored), so index pages that
-  gain new ads are picked up.
-* **Crawl depth** — one level: the listing page, plus each job/PDF/image link found on it. Pages that
-  turn out to be index pages are read as a whole (Gemini returns every job on them).
+* **Dedup** — `source_hash = sha256(page_url + normalized title)`; `seen_links` remembers every evaluated URL.
 * **JS-heavy / bot-blocking sites** — `"render": true` in `sources.json` forces Playwright; it is also used
-  automatically when plain HTTP returns almost no text or an HTTP error/connection reset.
-* **Failure isolation** — each source is crawled in its own try/except; an unreachable site is logged on
-  its `sources` row (`last_status/last_error`) and the crawl continues. Visible on `/admin`.
-* **Lifecycle** — Available = `status='active' AND closing date >= today(PKT)`; the API applies the date
-  check too, so there is no 00:00–00:05 gap. Expired rows are never deleted.
-* **Ads with no stated deadline** — `last_date` stays `NULL` and the card says "Deadline not stated".
-  They count as closed `NO_DEADLINE_EXPIRE_DAYS` (default 45) after `publish_date`.
-* **Cost control** — unlimited by default (only links/pages not seen before reach Gemini). Set
-  `MAX_NEW_PER_SOURCE` (e.g. 15) to cap Gemini calls per source per run; the rest is deferred to the next run.
-* **Admin** — `/admin` logs in against `ADMIN_PASSWORD`; the backend issues a signed 12 h token stored in an
-  httpOnly cookie. Set strong values for `ADMIN_PASSWORD` / `ADMIN_TOKEN_SECRET` before deploying.
+  by default for listing pages when `RENDER_LISTINGS=true`. If Playwright/Chromium is missing, the crawler
+  falls back to plain HTTP (required for the lightweight Vercel API bundle).
+* **Lifecycle** — Available = `status='active' AND closing date >= today(PKT)`. Expired rows are never deleted.
+* **Ads with no stated deadline** — `last_date` stays `NULL`; they expire `NO_DEADLINE_EXPIRE_DAYS` (default 45)
+  after `publish_date`.
+* **Admin** — `/admin` uses `ADMIN_PASSWORD`; the backend issues a signed 12 h token in an httpOnly cookie.
 
-## Deployment
+## Production (100% free): Vercel + Neon + GitHub Actions
 
-**Backend -> Hugging Face Spaces (Docker)** — the root `Dockerfile` builds the API plus Chromium for Playwright
-and listens on port **7860** (override with `PORT`).
-1. Create a PostgreSQL database that outlives the container (Supabase or Neon, direct / session connection).
-2. Create a new Space on https://huggingface.co/new-space with SDK **Docker** and push this repo to it
-   (the `sdk: docker` / `app_port: 7860` front matter at the top of this README configures the Space).
-3. Space -> Settings -> Variables and secrets: `DATABASE_URL`, `GEMINI_API_KEY`, `ADMIN_PASSWORD`,
-   `ADMIN_TOKEN_SECRET`, `CORS_ORIGINS` (your Vercel URL). Optional: `GEMINI_MODEL`, `MAX_CONCURRENT_SOURCES`.
-4. The schema is created on first start. Check `https://<user>-<space>.hf.space/api/health`.
-5. Keep exactly **one** instance (the scheduler and crawl lock are in-process). Free Spaces can go to sleep when
-   idle, which pauses the 6-hourly crawl and the 00:05 PKT expiry until the Space wakes up.
+No credit card required on the free tiers of all three.
 
-Build / run locally: `docker build -t pakgovjobs-api .` then
-`docker run -p 7860:7860 --env-file backend/.env pakgovjobs-api`.
+### 1. Neon PostgreSQL
+1. Create a free project at https://neon.tech and copy a connection string.
+2. For **GitHub Actions** (crawler), use the **direct** (non-pooler) URL so `pg_try_advisory_lock` works.
+3. For **Vercel** (API), the pooler URL is fine (and often better under serverless).
 
-**Frontend -> Vercel**
-1. New Project -> import the repo -> set **Root Directory** to `frontend` (framework: Next.js).
-2. Settings -> Environment Variables: `API_URL` = the Space URL (e.g. `https://<user>-<space>.hf.space`,
-   no trailing slash). It is read on the server only. (`NEXT_PUBLIC_API_URL` is accepted as an alias.)
-3. Deploy. After the first deploy, put the Vercel URL into the backend's `CORS_ORIGINS`.
+### 2. Vercel (frontend + API together)
+1. https://vercel.com/new → import this GitHub repo. Leave **Root Directory** empty (repository root).
+2. Framework / build are defined by root `vercel.json` (Next.js from `frontend/` + Python from `api/index.py`).
+3. Project → Settings → Environment Variables:
 
-Never commit `backend/.env`; secrets live only in the Space / Vercel dashboards.
+   | Name | Value |
+   | :-- | :-- |
+   | `DATABASE_URL` | Neon URL (pooler OK) |
+   | `ADMIN_PASSWORD` | strong password for `/admin` |
+   | `ADMIN_TOKEN_SECRET` | long random string |
+   | `CORS_ORIGINS` | `https://<your-vercel-domain>` (and preview URLs if needed) |
+   | `DB_POOL_MAX` | `3` (optional) |
+
+   Leave `API_URL` **unset** — the Next.js server calls the same deployment’s `/api/*`.
+4. Deploy. Health check: `https://<your-app>.vercel.app/api/health`.
+
+The Vercel Python function stays small (root `requirements.txt` has no Playwright/Chromium). It serves jobs
+from Neon only; it does **not** run the crawler or APScheduler.
+
+### 3. GitHub Actions (crawler every 6 hours)
+1. Repo → Settings → Secrets and variables → Actions. Add:
+
+   | Secret | Value |
+   | :-- | :-- |
+   | `DATABASE_URL` | Neon **direct** URL |
+   | `GEMINI_API_KEY` | from https://aistudio.google.com/apikey |
+   | `ADMIN_PASSWORD` | (optional, same as Vercel) |
+   | `ADMIN_TOKEN_SECRET` | (optional) |
+
+2. Workflow: `.github/workflows/crawl.yml` — cron `0 */6 * * *` (UTC) + **Run workflow** (manual), with an
+   optional source filter.
+3. First run: Actions → Crawl → Run workflow. Confirm new rows on the Vercel site / Neon console.
+
+Optional: set Vercel `GITHUB_TOKEN` + `GITHUB_REPO` so the `/admin` “Run crawler” button dispatches this workflow.
+
+Never commit `backend/.env`; secrets live only in Neon / Vercel / GitHub.
 
 ## Tests
 ```powershell
 cd backend
-.\.venv\Scripts\python -m pytest                       # unit tests
-$env:TEST_DATABASE_URL="postgresql://..."; .\.venv\Scripts\python -m pytest   # + end-to-end (TRUNCATEs that DB!)
+.\.venv\Scripts\python -m pytest                       # SQLite fallback by default
+$env:TEST_DATABASE_URL="postgresql://..."; .\.venv\Scripts\python -m pytest   # + Postgres (wipes that DB!)
 ```

@@ -30,7 +30,7 @@ export type AdminOverview = {
     summary: Record<string, number | string> | null;
   };
   schedule: Record<string, string | null>;
-  gemini_configured: boolean;
+  gemini_configured: boolean | null; // null on Vercel: the crawler (and the Gemini key) live in GitHub Actions
   counts: { active: number; expired: number; total: number };
   sources: AdminSource[];
 };

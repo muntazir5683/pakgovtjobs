@@ -1,0 +1,72 @@
+name: Crawl
+
+# Every 6 hours (UTC) + manual runs from the Actions tab.
+# Scrapes all sources (Playwright + Gemini) and writes into Neon via DATABASE_URL.
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Optional filter — only sources whose name/sector contains this text"
+        required: false
+        default: ""
+
+concurrency:
+  group: pakgovjobs-crawl
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        run: playwright install chromium --with-deps
+
+      - name: Init schema, crawl, expire
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Prefer Neon's direct (non-pooler) URL in DATABASE_URL so pg_try_advisory_lock works.
+          GEMINI_MODEL: gemini-2.5-flash
+          GEMINI_MIN_INTERVAL_SECONDS: "4.5"
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          ADMIN_TOKEN_SECRET: ${{ secrets.ADMIN_TOKEN_SECRET }}
+          RUN_SCHEDULER: "false"
+          CRAWL_ON_STARTUP: "false"
+          RENDER_LISTINGS: "true"
+          FALLBACK_PARSER: "true"
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL secret is not set" >&2
+            exit 1
+          fi
+          # Placeholders so Settings validation is happy when those secrets are omitted.
+          export ADMIN_PASSWORD="${ADMIN_PASSWORD:-ci-unused}"
+          export ADMIN_TOKEN_SECRET="${ADMIN_TOKEN_SECRET:-ci-unused-secret}"
+
+          python -m app.cli init-db
+          if [ -n "${{ github.event.inputs.source }}" ]; then
+            python -m app.cli crawl --source "${{ github.event.inputs.source }}"
+          else
+            python -m app.cli crawl
+          fi
+          python -m app.cli expire

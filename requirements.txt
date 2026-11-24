@@ -1,0 +1,8 @@
+# Lightweight deps for the Vercel Python serverless function (api/index.py).
+# Keep this under Vercel's ~250 MB unzipped limit: no Playwright, Chromium, APScheduler, or pytest.
+# Full crawler stack lives in backend/requirements.txt (used by GitHub Actions + local uvicorn).
+fastapi>=0.115
+psycopg[binary,pool]>=3.2
+pydantic>=2.9
+pydantic-settings>=2.5
+tzdata
